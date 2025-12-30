@@ -60,6 +60,13 @@ class Server:
         elif msg_type == LEADER_ANNOUNCE:
             self.handle_leader_announce(msg, addr)
 
+        elif msg_type == LIST_CHATROOMS:
+            # Send back the list of current chatrooms
+            self.send(addr, {
+                "type": CHATROOMS_LIST,
+                "rooms": list(self.state.chatrooms.keys())
+            })
+
     # -------------------- Client Join --------------------
 
     def handle_client_join(self, msg, addr):
@@ -67,6 +74,7 @@ class Server:
         room = msg.get("room", "default")
 
         self.state.clients[client_id] = addr
+        # Create room if it doesn't exist
         self.state.chatrooms.setdefault(room, set()).add(client_id)
 
         self.send(addr, {
