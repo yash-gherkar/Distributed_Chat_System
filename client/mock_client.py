@@ -13,13 +13,14 @@ class MockClient:
         self.client_id = client_id
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("", 0))  # random port
-
         self.pending_messages = {}  # msg_id -> message
+        self.current_room = None
 
     def send(self, msg):
         self.sock.sendto(json.dumps(msg).encode(), SERVER_ADDR)
 
     def join(self, room="default"):
+        self.current_room = room
         self.send({
             "type": "CLIENT_JOIN",
             "client_id": self.client_id,
@@ -39,6 +40,9 @@ class MockClient:
         self.pending_messages[msg_id] = msg
         self.send(msg)
 
+    def list_chatrooms(self):
+        self.send({"type": "LIST_CHATROOMS"})
+
     def listen(self):
         while True:
             data, _ = self.sock.recvfrom(BUFFER_SIZE)
@@ -49,8 +53,7 @@ class MockClient:
         t = msg["type"]
 
         if t == "CHAT_MSG":
-            print(f"[RECV] {msg['from']}: {msg['body']}")
-
+            print(f"[{msg['room']}] {msg['from']}: {msg['body']}")
             # send ACK
             self.send({
                 "type": "ACK",
@@ -68,14 +71,29 @@ class MockClient:
             if msg_id in self.pending_messages:
                 self.send(self.pending_messages[msg_id])
 
+        elif t == "CHATROOMS_LIST":
+            print("Available chatrooms:")
+            if not msg["rooms"]:
+                print("  (No existing chatrooms)")
+            for room in msg["rooms"]:
+                print(f"- {room}")
+
+        elif t == "JOIN_ACK":
+            print(f"[JOINED] You joined '{self.current_room}'")
 
 if __name__ == "__main__":
     cid = input("Client ID: ")
     client = MockClient(cid)
-    client.join()
+
+    # List available chatrooms first
+    client.list_chatrooms()
+    time.sleep(0.5)  # small delay to allow server to respond
+
+    room = input("Enter chatroom to join or create: ")
+    client.join(room)
 
     threading.Thread(target=client.listen, daemon=True).start()
 
     while True:
         text = input("> ")
-        client.send_message("default", text)
+        client.send_message(client.current_room, text)
