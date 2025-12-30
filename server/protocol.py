@@ -18,7 +18,7 @@ RESEND_REQUEST = "RESEND_REQUEST"   #server asks sender to resend
 
 # Server ↔ Server
 SERVER_UP = "SERVER_UP"         #new server joined
-SERVER_SYNC = "SERVER_SYNC"     #Leader sends full state
+STATE_SYNC = "STATE_SYNC"     #Leader sends full state
 HEARTBEAT = "HEARTBEAT"         #server heartbeat
 ELECTION = "ELECTION"           #election trigger
 LEADER_ANNOUNCE = "LEADER_ANNOUNCE" #new leader announced
