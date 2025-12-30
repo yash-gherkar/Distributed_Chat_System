@@ -11,6 +11,8 @@ class ServerState:
         self.servers = {}      # server_id -> (ip, port)
         self.clients = {}      # client_id -> (ip, port)
         self.chatrooms = {}    # room_id -> set(client_id)
+        self.server_load = {}  # server_id -> number of rooms hosted
+        self.local_rooms = {} # room_name -> set(client_id) (ONLY rooms hosted here)
 
         self.pending_acks = {} # msg_id -> ack tracking
 

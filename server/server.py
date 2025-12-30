@@ -1,3 +1,4 @@
+# server/server.py
 import socket
 import json
 import threading
@@ -11,28 +12,28 @@ from election import ElectionManager
 
 BUFFER_SIZE = 4096
 
-ACK_TIMEOUT = 5            # seconds
-RESEND_CHECK_INTERVAL = 1  # seconds
-
 
 class Server:
     def __init__(self, server_id, port):
         self.state = ServerState(server_id)
 
-        self.addr = ("", port)
+        self.addr = ("127.0.0.1", port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(self.addr)
 
         self.heartbeat = HeartbeatManager(self)
         self.election = ElectionManager(self)
 
-        print(f"[START] Server {server_id} listening on UDP port {port}")
+        # leader initializes itself
+        self.state.servers[server_id] = self.addr
+        self.state.server_load[server_id] = 0
 
-    # -------------------- Networking --------------------
+        print(f"[START] Server {server_id} on port {port}")
+
+    # ---------------- Networking ----------------
 
     def send(self, addr, msg):
-        data = json.dumps(msg).encode()
-        self.sock.sendto(data, addr)
+        self.sock.sendto(json.dumps(msg).encode(), addr)
 
     def receive_loop(self):
         while True:
@@ -40,130 +41,147 @@ class Server:
             msg = json.loads(data.decode())
             self.handle_message(msg, addr)
 
-    # -------------------- Message Dispatch --------------------
+    # ---------------- Dispatcher ----------------
 
     def handle_message(self, msg, addr):
-        msg_type = msg["type"]
+        t = msg["type"]
 
-        if msg_type == CLIENT_JOIN:
+        if t == SERVER_UP:
+            self.handle_server_up(msg, addr)
+
+        elif t == STATE_SYNC:
+            self.handle_state_sync(msg)
+
+        elif t == CLIENT_JOIN:
             self.handle_client_join(msg, addr)
 
-        elif msg_type == CHAT_MSG:
-            self.handle_chat_message(msg)
-
-        elif msg_type == ACK:
-            self.handle_ack(msg)
-
-        elif msg_type == HEARTBEAT:
-            self.state.last_heartbeat = time.time()
-
-        elif msg_type == LEADER_ANNOUNCE:
-            self.handle_leader_announce(msg, addr)
-
-        elif msg_type == LIST_CHATROOMS:
-            # Send back the list of current chatrooms
+        elif t == LIST_CHATROOMS:
             self.send(addr, {
                 "type": CHATROOMS_LIST,
                 "rooms": list(self.state.chatrooms.keys())
             })
 
-    # -------------------- Client Join --------------------
+        elif t == CREATE_CHATROOM:
+            self.handle_create_chatroom(msg, addr)
 
-    def handle_client_join(self, msg, addr):
-        client_id = msg["client_id"]
-        room = msg.get("room", "default")
+        elif t == JOIN_CHATROOM:
+            self.handle_join_chatroom(msg, addr)
 
-        self.state.clients[client_id] = addr
-        # Create room if it doesn't exist
-        self.state.chatrooms.setdefault(room, set()).add(client_id)
+        elif t == ROOM_ASSIGNMENT_UPDATE:
+            self.handle_room_update(msg)
 
-        self.send(addr, {
-            "type": JOIN_ACK,
-            "leader": self.state.is_leader
-        })
+        elif t == CHAT_MSG:
+            self.handle_chat_message(msg)
 
-        print(f"[JOIN] Client {client_id} joined room '{room}'")
+        elif t == ACK:
+            self.handle_ack(msg)
 
-    # -------------------- Chat + ACK Logic --------------------
+        elif t == HEARTBEAT:
+            self.state.last_heartbeat = time.time()
 
-    def handle_chat_message(self, msg):
-        msg_id = msg["msg_id"]
-        sender = msg["from"]
-        room = msg["room"]
+        elif t == LEADER_ANNOUNCE:
+            self.state.is_leader = (msg["leader_id"] == self.state.server_id)
+            self.state.leader_addr = addr
+            print(f"[LEADER] New leader {msg['leader_id']}")
 
-        recipients = self.state.chatrooms.get(room, set())
+    # ---------------- Server Join ----------------
 
-        self.state.pending_acks[msg_id] = {
-            "sender": sender,
-            "room": room,
-            "waiting_for": set(recipients),
-            "timestamp": time.time(),
-            "message": msg
-        }
-
-        print(f"[CHAT] {sender} -> room '{room}' (msg {msg_id})")
-
-        for cid in recipients:
-            self.send(self.state.clients[cid], msg)
-
-    def handle_ack(self, msg):
-        msg_id = msg["msg_id"]
-        client_id = msg["from"]
-
-        entry = self.state.pending_acks.get(msg_id)
-        if not entry:
+    def handle_server_up(self, msg, addr):
+        if not self.state.is_leader:
             return
 
-        entry["waiting_for"].discard(client_id)
+        sid = msg["server_id"]
+        self.state.servers[sid] = addr
+        self.state.server_load[sid] = 0
 
-        if not entry["waiting_for"]:
-            sender = entry["sender"]
-            self.send(self.state.clients[sender], {
-                "type": DELIVERED,
-                "msg_id": msg_id
+        self.send(addr, {
+            "type": STATE_SYNC,
+            "chatrooms": self.state.chatrooms,
+            "server_load": self.state.server_load
+        })
+
+        print(f"[SERVER] Server {sid} joined cluster")
+
+    def handle_state_sync(self, msg):
+        self.state.chatrooms = msg["chatrooms"]
+        self.state.server_load = msg["server_load"]
+        print("[SYNC] State synchronized")
+
+    # ---------------- Client Logic ----------------
+
+    def handle_client_join(self, msg, addr):
+        self.state.clients[msg["client_id"]] = addr
+
+        # always reply with chatroom list
+        self.send(addr, {
+            "type": CHATROOMS_LIST,
+            "rooms": list(self.state.chatrooms.keys())
+        })
+
+    def handle_create_chatroom(self, msg, addr):
+        room = msg["room"]
+
+        # leader assigns least-loaded server
+        target = min(self.state.server_load, key=self.state.server_load.get)
+        self.state.chatrooms[room] = target
+        self.state.server_load[target] += 1
+
+        # broadcast assignment
+        for saddr in self.state.servers.values():
+            self.send(saddr, {
+                "type": ROOM_ASSIGNMENT_UPDATE,
+                "room": room,
+                "server_id": target
             })
-            del self.state.pending_acks[msg_id]
 
-            print(f"[DELIVERED] Message {msg_id}")
+        # tell client
+        self.send(addr, {
+            "type": ROOM_ASSIGNMENT,
+            "room": room,
+            "server_addr": self.state.servers[target]
+        })
 
-    # -------------------- Resend Logic --------------------
+        print(f"[ROOM] '{room}' assigned to Server {target}")
 
-    def start_resend_monitor(self):
-        def monitor():
-            while True:
-                now = time.time()
-                for msg_id, entry in list(self.state.pending_acks.items()):
-                    if now - entry["timestamp"] > ACK_TIMEOUT:
-                        sender = entry["sender"]
+    def handle_join_chatroom(self, msg, addr):
+        room = msg["room"]
+        owner = self.state.chatrooms[room]
 
-                        print(f"[RESEND] Requesting resend of {msg_id}")
+        self.send(addr, {
+            "type": ROOM_ASSIGNMENT,
+            "room": room,
+            "server_addr": self.state.servers[owner]
+        })
 
-                        self.send(self.state.clients[sender], {
-                            "type": RESEND_REQUEST,
-                            "msg_id": msg_id
-                        })
+    def handle_room_update(self, msg):
+        room = msg["room"]
+        sid = msg["server_id"]
 
-                        entry["timestamp"] = now
+        self.state.chatrooms[room] = sid
+        if sid == self.state.server_id:
+            self.state.local_rooms.setdefault(room, set())
 
-                time.sleep(RESEND_CHECK_INTERVAL)
+        print(f"[UPDATE] Room '{room}' owned by Server {sid}")
 
-        threading.Thread(target=monitor, daemon=True).start()
+    # ---------------- Chat ----------------
 
-    # -------------------- Election --------------------
+    def handle_chat_message(self, msg):
+        room = msg["room"]
+        sender = msg["from"]
 
-    def start_election(self):
-        self.election.start_election()
+        if room not in self.state.local_rooms:
+            return
 
-    def handle_leader_announce(self, msg, addr):
-        leader_id = msg["leader_id"]
+        print(f"[ROOM {room}] {sender}: {msg['body']}")
 
-        self.state.is_leader = (leader_id == self.state.server_id)
-        self.state.leader_addr = addr
+        for cid, addr in self.state.clients.items():
+            self.send(addr, msg)
 
-        print(f"[LEADER] New leader elected: Server {leader_id}")
+    def handle_ack(self, msg):
+        pass  # simplified for demo
 
 
-# -------------------- Main --------------------
+# ---------------- Main ----------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -173,6 +191,16 @@ if __name__ == "__main__":
 
     server = Server(args.id, args.port)
 
+    if args.id == 1:
+        server.state.is_leader = True
+        server.state.leader_addr = server.addr
+        print("[LEADER] I am the leader")
+
+    else:
+        server.send(("127.0.0.1", 5001), {
+            "type": SERVER_UP,
+            "server_id": args.id
+        })
+
     server.heartbeat.start()
-    server.start_resend_monitor()
     server.receive_loop()
