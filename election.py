@@ -1,3 +1,4 @@
+
 # server/election.py
 from protocol import ELECTION, LEADER_ANNOUNCE
 

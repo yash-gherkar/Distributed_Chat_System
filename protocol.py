@@ -1,3 +1,4 @@
+
 # server/protocol.py
 
 # Client ↔ Leader
