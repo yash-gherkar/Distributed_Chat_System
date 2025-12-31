@@ -1,3 +1,4 @@
+# mock_client.py
 import socket
 import json
 import threading
@@ -6,7 +7,7 @@ import time
 from protocol import *
 
 BUFFER_SIZE = 4096
-SERVER_ADDR = ("127.0.0.1", 5001)
+SERVER_ADDR = ("127.0.0.1", 5001)  # initial leader server address
 
 class MockClient:
     def __init__(self, cid):
@@ -21,8 +22,11 @@ class MockClient:
 
     def listen(self):
         while True:
-            data, addr = self.sock.recvfrom(BUFFER_SIZE)
-            self.handle(json.loads(data.decode()), addr)
+            try:
+                data, addr = self.sock.recvfrom(BUFFER_SIZE)
+                self.handle(json.loads(data.decode()), addr)
+            except Exception as e:
+                print(f"[ERROR] {e}")
 
     def handle(self, msg, addr):
         t = msg["type"]
@@ -41,7 +45,8 @@ class MockClient:
             print(f"[{self.id}] Joined room '{self.room}' on server {self.chat_server}")
 
         elif t == CHAT_MSG:
-            print(f"[{self.id}] {msg['from']}: {msg['body']}")
+            if msg["room"] == self.room:
+                print(f"[{self.id}] {msg['from']}: {msg['body']}")
 
     def start(self):
         # Announce to server

@@ -1,8 +1,10 @@
 # server/server.py
 import socket
 import json
+import threading
 import time
 import argparse
+import uuid
 
 from protocol import *
 from state import ServerState
@@ -10,7 +12,6 @@ from heartbeat import HeartbeatManager
 from election import ElectionManager
 
 BUFFER_SIZE = 4096
-
 
 class Server:
     def __init__(self, server_id, port):
@@ -23,14 +24,13 @@ class Server:
         self.heartbeat = HeartbeatManager(self)
         self.election = ElectionManager(self)
 
-        # register self
+        # leader initializes itself
         self.state.servers[server_id] = self.addr
         self.state.server_load[server_id] = 0
 
         print(f"[START] Server {server_id} on port {port}")
 
     # ---------------- Networking ----------------
-
     def send(self, addr, msg):
         self.sock.sendto(json.dumps(msg).encode(), addr)
 
@@ -41,107 +41,142 @@ class Server:
             self.handle_message(msg, addr)
 
     # ---------------- Dispatcher ----------------
-
     def handle_message(self, msg, addr):
         t = msg["type"]
 
-        if t == SERVER_UP and self.state.is_leader:
-            sid = msg["server_id"]
-            self.state.servers[sid] = addr
-            self.state.server_load[sid] = 0
-
-            self.send(addr, {
-                "type": STATE_SYNC,
-                "chatrooms": self.state.chatrooms,
-                "server_load": self.state.server_load,
-                "leader_id": self.state.server_id,
-                "leader_addr": self.addr
-            })
-
-            print(f"[SERVER] Server {sid} joined")
+        if t == SERVER_UP:
+            self.handle_server_up(msg, addr)
 
         elif t == STATE_SYNC:
-            self.state.chatrooms = msg["chatrooms"]
-            self.state.server_load = msg["server_load"]
-
-            self.state.leader_id = msg["leader_id"]
-            self.state.leader_addr = tuple(msg["leader_addr"])
-
-            # re-register self
-            self.state.servers[self.state.server_id] = self.addr
-
-            print("[SYNC] State synchronized")
-
-        elif t == LEADER_ANNOUNCE:
-            self.state.leader_id = msg["leader_id"]
-            self.state.is_leader = (msg["leader_id"] == self.state.server_id)
-            self.state.leader_addr = addr
-            print(f"[LEADER] Leader is {msg['leader_id']}")
-
-        elif t == HEARTBEAT:
-            self.state.last_heartbeat = time.time()
+            self.handle_state_sync(msg)
 
         elif t == CLIENT_JOIN:
-            self.state.clients[msg["client_id"]] = addr
+            self.handle_client_join(msg, addr)
+
+        elif t == LIST_CHATROOMS:
             self.send(addr, {
                 "type": CHATROOMS_LIST,
                 "rooms": list(self.state.chatrooms.keys())
             })
 
-        elif t in (CREATE_CHATROOM, JOIN_CHATROOM):
-            self._handle_room_request(msg, addr)
+        elif t == CREATE_CHATROOM:
+            self.handle_create_chatroom(msg, addr)
+
+        elif t == JOIN_CHATROOM:
+            self.handle_join_chatroom(msg, addr)
 
         elif t == ROOM_ASSIGNMENT_UPDATE:
-            room = msg["room"]
-            sid = msg["server_id"]
-            self.state.chatrooms[room] = sid
-
-            if sid == self.state.server_id:
-                self.state.local_rooms.setdefault(room, set())
-
-            print(f"[ROOM] {room} hosted by server {sid}")
+            self.handle_room_update(msg)
 
         elif t == CHAT_MSG:
-            room = msg["room"]
-            if room not in self.state.local_rooms:
-                return
+            self.handle_chat_message(msg)
 
-            for caddr in self.state.clients.values():
-                self.send(caddr, msg)
+        elif t == ACK:
+            self.handle_ack(msg)
 
-    # ---------------- Room Handling ----------------
+        elif t == HEARTBEAT:
+            self.state.last_heartbeat = time.time()
 
-    def _handle_room_request(self, msg, addr):
+        elif t == LEADER_ANNOUNCE:
+            self.state.is_leader = (msg["leader_id"] == self.state.server_id)
+            self.state.leader_addr = addr
+            print(f"[LEADER] New leader {msg['leader_id']}")
+
+    # ---------------- Server Join ----------------
+    def handle_server_up(self, msg, addr):
         if not self.state.is_leader:
-            self.send(self.state.leader_addr, msg)
             return
 
+        sid = msg["server_id"]
+        self.state.servers[sid] = addr
+        self.state.server_load[sid] = 0
+
+        self.send(addr, {
+            "type": STATE_SYNC,
+            "chatrooms": self.state.chatrooms,
+            "server_load": self.state.server_load
+        })
+
+        print(f"[SERVER] Server {sid} joined cluster")
+
+    def handle_state_sync(self, msg):
+        self.state.chatrooms = msg["chatrooms"]
+        self.state.server_load = msg["server_load"]
+        print("[SYNC] State synchronized")
+
+    # ---------------- Client Logic ----------------
+    def handle_client_join(self, msg, addr):
+        self.state.clients[msg["client_id"]] = addr
+
+        # always reply with chatroom list
+        self.send(addr, {
+            "type": CHATROOMS_LIST,
+            "rooms": list(self.state.chatrooms.keys())
+        })
+
+    def handle_create_chatroom(self, msg, addr):
         room = msg["room"]
 
-        if room not in self.state.chatrooms:
-            target = min(self.state.server_load, key=self.state.server_load.get)
-            self.state.chatrooms[room] = target
-            self.state.server_load[target] += 1
+        # leader assigns least-loaded server
+        target = min(self.state.server_load, key=self.state.server_load.get)
+        self.state.chatrooms[room] = target
+        self.state.server_load[target] += 1
 
-            for saddr in self.state.servers.values():
-                self.send(saddr, {
-                    "type": ROOM_ASSIGNMENT_UPDATE,
-                    "room": room,
-                    "server_id": target
-                })
+        # broadcast assignment
+        for saddr in self.state.servers.values():
+            self.send(saddr, {
+                "type": ROOM_ASSIGNMENT_UPDATE,
+                "room": room,
+                "server_id": target
+            })
 
-            print(f"[ROOM] Created '{room}' on server {target}")
+        # tell client
+        self.send(addr, {
+            "type": ROOM_ASSIGNMENT,
+            "room": room,
+            "server_addr": self.state.servers[target]
+        })
 
+        print(f"[ROOM] '{room}' assigned to Server {target}")
+
+    def handle_join_chatroom(self, msg, addr):
+        room = msg["room"]
         owner = self.state.chatrooms[room]
+
         self.send(addr, {
             "type": ROOM_ASSIGNMENT,
             "room": room,
             "server_addr": self.state.servers[owner]
         })
 
+    def handle_room_update(self, msg):
+        room = msg["room"]
+        sid = msg["server_id"]
+
+        self.state.chatrooms[room] = sid
+        if sid == self.state.server_id:
+            self.state.local_rooms.setdefault(room, set())
+
+        print(f"[UPDATE] Room '{room}' owned by Server {sid}")
+
+    # ---------------- Chat ----------------
+    def handle_chat_message(self, msg):
+        room = msg["room"]
+        sender = msg["from"]
+
+        if room not in self.state.local_rooms:
+            return
+
+        print(f"[ROOM {room}] {sender}: {msg['body']}")
+
+        for cid, addr in self.state.clients.items():
+            self.send(addr, msg)
+
+    def handle_ack(self, msg):
+        pass  # simplified for demo
+
 
 # ---------------- Main ----------------
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--id", type=int, required=True)
@@ -152,9 +187,9 @@ if __name__ == "__main__":
 
     if args.id == 1:
         server.state.is_leader = True
-        server.state.leader_id = 1
         server.state.leader_addr = server.addr
         print("[LEADER] I am the leader")
+
     else:
         server.send(("127.0.0.1", 5001), {
             "type": SERVER_UP,
