@@ -1,4 +1,4 @@
-# server/heartbeat.py
+# heartbeat.py
 import threading
 import time
 from protocol import HEARTBEAT
@@ -14,23 +14,22 @@ class HeartbeatManager:
         threading.Thread(target=self._send_loop, daemon=True).start()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
 
-    # Leader sends heartbeat to all other servers
     def _send_loop(self):
         while True:
             if self.server.state.is_leader:
                 for sid, addr in self.server.state.servers.items():
-                    if sid != self.server.state.server_id:
-                        self.server.send(addr, {
-                            "type": HEARTBEAT,
-                            "from": self.server.state.server_id
-                        })
+                    self.server.send(addr, {"type": HEARTBEAT, "from": self.server.state.server_id})
+            else:
+                if self.server.state.leader_addr:
+                    self.server.send(self.server.state.leader_addr, {"type": HEARTBEAT, "from": self.server.state.server_id})
             time.sleep(HEARTBEAT_INTERVAL)
 
-    # Non-leaders monitor heartbeat
     def _monitor_loop(self):
         while True:
+            now = time.time()
             if not self.server.state.is_leader:
-                if time.time() - self.server.state.last_heartbeat > HEARTBEAT_TIMEOUT:
-                    print("[HEARTBEAT] Leader timeout detected! Starting election...")
-                    self.server.election.start_election()
+                last = self.server.state.last_heartbeat.get("leader", 0)
+                if now - last > HEARTBEAT_TIMEOUT:
+                    print("[HEARTBEAT] Leader timeout detected")
+                    self.server.election_manager.start_election()
             time.sleep(1)
