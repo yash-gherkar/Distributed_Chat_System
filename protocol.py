@@ -1,9 +1,7 @@
-
-# server/protocol.py
+# protocol.py
 
 # Client ↔ Leader
-CLIENT_JOIN = "CLIENT_JOIN"     #client announces itself
-#list the chatroom list
+CLIENT_JOIN = "CLIENT_JOIN"     
 LIST_CHATROOMS = "LIST_CHATROOMS" 
 CHATROOMS_LIST = "CHATROOMS_LIST"
 CREATE_CHATROOM = "CREATE_CHATROOM"
@@ -11,16 +9,15 @@ JOIN_CHATROOM = "JOIN_CHATROOM"
 ROOM_ASSIGNMENT = "ROOM_ASSIGNMENT"
 
 # Client ↔ Chatroom Server
-#JOIN_ACK = "JOIN_ACK"           #client acknowledges joining chatroom
-CHAT_MSG = "CHAT_MSG"           #send chat message
-ACK = "ACK"                     #client acknowldges message
-DELIVERED = "DELIVERED"         #server confirms delivery
-RESEND_REQUEST = "RESEND_REQUEST"   #server asks sender to resend
+CHAT_MSG = "CHAT_MSG"           
+ACK = "ACK"                     
+DELIVERED = "DELIVERED"         
+RESEND_REQUEST = "RESEND_REQUEST"
 
 # Server ↔ Server
-SERVER_UP = "SERVER_UP"         #new server joined
-STATE_SYNC = "STATE_SYNC"     #Leader sends full state
-HEARTBEAT = "HEARTBEAT"         #server heartbeat
-ELECTION = "ELECTION"           #election trigger
-LEADER_ANNOUNCE = "LEADER_ANNOUNCE" #new leader announced
-ROOM_ASSIGNMENT_UPDATE = "ROOM_ASSIGNMENT_UPDATE" #Sync room ownership
+SERVER_UP = "SERVER_UP"         
+STATE_SYNC = "STATE_SYNC"     
+HEARTBEAT = "HEARTBEAT"         
+ELECTION = "ELECTION"           
+LEADER_ANNOUNCE = "LEADER_ANNOUNCE" 
+ROOM_ASSIGNMENT_UPDATE = "ROOM_ASSIGNMENT_UPDATE" 

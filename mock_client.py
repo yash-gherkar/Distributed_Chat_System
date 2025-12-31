@@ -2,10 +2,11 @@ import socket
 import json
 import threading
 import uuid
+import time
+from protocol import *
 
-SERVER_ADDR = ("127.0.0.1", 5001)
 BUFFER_SIZE = 4096
-
+SERVER_ADDR = ("127.0.0.1", 5001)
 
 class MockClient:
     def __init__(self, cid):
@@ -27,26 +28,35 @@ class MockClient:
         t = msg["type"]
 
         if t == CHATROOMS_LIST:
-            print("Available rooms:", msg["rooms"])
+            print(f"[{self.id}] Available rooms: {msg['rooms']}")
+            choice = input(f"[{self.id}] Type room to join or new room name to create: ").strip()
+            if choice in msg["rooms"]:
+                self.send({"type": JOIN_CHATROOM, "client_id": self.id, "room": choice})
+            else:
+                self.send({"type": CREATE_CHATROOM, "client_id": self.id, "room": choice})
 
         elif t == ROOM_ASSIGNMENT:
             self.chat_server = tuple(msg["server_addr"])
             self.room = msg["room"]
-            print(f"[JOINED] {self.room} on {self.chat_server}")
+            print(f"[{self.id}] Joined room '{self.room}' on server {self.chat_server}")
 
         elif t == CHAT_MSG:
-            print(f"{msg['from']}: {msg['body']}")
+            print(f"[{self.id}] {msg['from']}: {msg['body']}")
 
     def start(self):
+        # Announce to server
         self.send({"type": CLIENT_JOIN, "client_id": self.id})
 
-        room = input("Enter chatroom name: ")
-        self.send({"type": CREATE_CHATROOM, "room": room})
-
+        # Start listening thread
         threading.Thread(target=self.listen, daemon=True).start()
 
+        # Wait until room assigned
+        while self.room is None:
+            time.sleep(0.1)
+
+        # Chat loop
         while True:
-            text = input("> ")
+            text = input(f"[{self.id}] > ")
             self.send({
                 "type": CHAT_MSG,
                 "msg_id": str(uuid.uuid4()),
