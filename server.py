@@ -9,6 +9,7 @@ from protocol import *
 BUFFER_SIZE = 4096
 HEARTBEAT_INTERVAL = 2
 HEARTBEAT_TIMEOUT = 6
+DISCOVERY_PORT = 5000
 
 class Server:
     def __init__(self, server_id, port):
@@ -33,6 +34,8 @@ class Server:
         threading.Thread(target=self.receive_loop, daemon=True).start()
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
         threading.Thread(target=self.election_loop, daemon=True).start()
+        threading.Thread(target=self.discovery_loop, daemon=True).start()
+
 
     def send(self, addr, msg):
         self.sock.sendto(json.dumps(msg).encode(), addr)
@@ -117,6 +120,27 @@ class Server:
                 "addr": self.addr,
                 "is_leader": self.is_leader
             })
+    def discovery_loop(self):
+        disc_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        disc_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        disc_sock.bind(("", DISCOVERY_PORT))  # listen on discovery port
+
+        while True:
+            try:
+                data, addr = disc_sock.recvfrom(BUFFER_SIZE)
+                msg = json.loads(data.decode())
+                if msg.get("type") == DISCOVER_SERVER:
+                    # Reply with this server's chat port and leader info
+                    reply = {
+                        "type": SERVER_ADVERTISEMENT,
+                        "server_id": self.id,
+                        "addr": (self.get_ip(), self.port),  # chat port, not discovery port
+                        "is_leader": self.is_leader,
+                        "load": len(self.chatrooms)  # optional: for load balancing
+                    }
+                    disc_sock.sendto(json.dumps(reply).encode(), addr)
+            except Exception as e:
+                print("Discovery error:", e)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import time
 from protocol import *
 
 BUFFER_SIZE = 4096
+DISCOVERY_PORT = 5000
 #SERVER_ADDR = ("127.0.0.1", 5001)  # initial leader server address
 
 class Client:
@@ -73,16 +74,24 @@ class Client:
             }, self.chat_server)
 
     def discover_server(self):
-        broadcast_addr = ("255.255.255.255", 5001)
-        self.send({"type": DISCOVER_SERVER}, broadcast_addr)
+        disc_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        disc_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        disc_sock.settimeout(3)  # timeout in case no server replies
 
-        data, addr = self.sock.recvfrom(BUFFER_SIZE)
-        msg = json.loads(data.decode())
+        disc_msg = {"type": DISCOVER_SERVER, "client_id": self.id}
+        disc_sock.sendto(json.dumps(disc_msg).encode(), ("255.255.255.255", DISCOVERY_PORT))
 
-        if msg["type"] == SERVER_ADVERTISEMENT:
-            print(f"[DISCOVERY] Found server {msg['server_id']} at {msg['addr']}")
-            return tuple(msg["addr"])
+        try:
+            data, addr = disc_sock.recvfrom(BUFFER_SIZE)
+            msg = json.loads(data.decode())
+            if msg["type"] == SERVER_ADVERTISEMENT:
+                print(f"[DISCOVERY] Found server {msg['server_id']} at {msg['addr']}")
+                return tuple(msg["addr"])  # chat server addr
+        except socket.timeout:
+            print("[DISCOVERY] No servers found, retrying...")
+            return self.discover_server()  # keep retrying
+
 
 if __name__ == "__main__":
     cid = input("Client ID: ")
-    Cient(cid).start()
+    Client(cid).start()
