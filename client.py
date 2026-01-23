@@ -7,15 +7,16 @@ import time
 from protocol import *
 
 BUFFER_SIZE = 4096
-SERVER_ADDR = ("127.0.0.1", 5001)  # initial leader server address
+#SERVER_ADDR = ("127.0.0.1", 5001)  # initial leader server address
 
-class MockClient:
+class Client:
     def __init__(self, cid):
         self.id = cid
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("", 0))
         self.chat_server = None
         self.room = None
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     def send(self, msg, addr=None):
         self.sock.sendto(json.dumps(msg).encode(), addr or SERVER_ADDR)
@@ -50,7 +51,8 @@ class MockClient:
 
     def start(self):
         # Announce to server
-        self.send({"type": CLIENT_JOIN, "client_id": self.id})
+        server_addr = self.discover_server()
+        self.send({"type": CLIENT_JOIN, "client_id": self.id}, server_addr)
 
         # Start listening thread
         threading.Thread(target=self.listen, daemon=True).start()
@@ -70,7 +72,17 @@ class MockClient:
                 "body": text
             }, self.chat_server)
 
+    def discover_server(self):
+        broadcast_addr = ("255.255.255.255", 5001)
+        self.send({"type": DISCOVER_SERVER}, broadcast_addr)
+
+        data, addr = self.sock.recvfrom(BUFFER_SIZE)
+        msg = json.loads(data.decode())
+
+        if msg["type"] == SERVER_ADVERTISEMENT:
+            print(f"[DISCOVERY] Found server {msg['server_id']} at {msg['addr']}")
+            return tuple(msg["addr"])
 
 if __name__ == "__main__":
     cid = input("Client ID: ")
-    MockClient(cid).start()
+    Cient(cid).start()

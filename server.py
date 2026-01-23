@@ -17,6 +17,7 @@ class Server:
         self.addr = ('', port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(self.addr)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
         # Server state
         self.is_leader = False
@@ -108,6 +109,15 @@ class Server:
 
         elif t == HEARTBEAT:
             self.last_heartbeat = time.time()
+
+        elif t == DISCOVER_SERVER:
+            self.send(addr, {
+                "type": SERVER_ADVERTISEMENT,
+                "server_id": self.id,
+                "addr": self.addr,
+                "is_leader": self.is_leader
+            })
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
