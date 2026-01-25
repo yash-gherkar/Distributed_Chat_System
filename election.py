@@ -1,7 +1,4 @@
-# election.py
 import threading
-import time
-import pickle
 from protocol import ELECTION, LEADER_ANNOUNCE
 
 class ElectionManager:
@@ -14,54 +11,44 @@ class ElectionManager:
         with self.lock:
             print("[ELECTION] Starting ring election")
             self.participant = True
-            # Ring election message: {'mid': unique_id, 'IP': sender IP, 'isLeader': False}
-            msg = {
-                "mid": self.server.state.server_id,
-                "IP": self.server.addr[0],
-                "isLeader": False
-            }
-            neighbor = self.server.get_ring_neighbor()
-            self.server.send(neighbor, msg)
+            msg = {"mid": self.server.state.server_id, "IP": "127.0.0.1", "isLeader": False}
+            neighbor = self.get_ring_neighbor()
+            self.server.send(neighbor, {"type": "ELECTION_MSG", **msg})
 
     def handle_election_message(self, msg):
-        """Handle incoming election message"""
-        msg_mid = msg["mid"]
-        msg_ip = msg["IP"]
+        mid = msg["mid"]
         is_leader = msg["isLeader"]
-
         if is_leader:
-            # Leader announcement
-            self.server.state.leader_addr = (msg_ip, self.server.server_port)
-            self.server.state.is_leader = (msg_ip == self.server.addr[0])
-            print(f"[ELECTION] Leader announced: {msg_ip}")
+            self.server.state.leader_addr = (msg["IP"], self.server.state.port)
+            self.server.state.is_leader = (msg["IP"] == "127.0.0.1")
+            print(f"[ELECTION] Leader announced: {self.server.state.leader_addr}")
             self.participant = False
             return
 
-        if msg_mid > self.server.state.server_id:
-            # Forward the message
-            neighbor = self.server.get_ring_neighbor()
+        if mid > self.server.state.server_id:
+            neighbor = self.get_ring_neighbor()
             self.server.send(neighbor, msg)
             self.participant = True
-        elif msg_mid < self.server.state.server_id and not self.participant:
-            # Replace and forward
-            new_msg = {
-                "mid": self.server.state.server_id,
-                "IP": self.server.addr[0],
-                "isLeader": False
-            }
-            neighbor = self.server.get_ring_neighbor()
+        elif mid < self.server.state.server_id and not self.participant:
+            new_msg = {"mid": self.server.state.server_id, "IP": "127.0.0.1", "isLeader": False}
+            neighbor = self.get_ring_neighbor()
             self.server.send(neighbor, new_msg)
             self.participant = True
-        elif msg_mid == self.server.state.server_id:
-            # I am the leader now
-            announce = {
-                "mid": self.server.state.server_id,
-                "IP": self.server.addr[0],
-                "isLeader": True
-            }
-            neighbor = self.server.get_ring_neighbor()
+        elif mid == self.server.state.server_id:
+            announce = {"mid": self.server.state.server_id, "IP": "127.0.0.1", "isLeader": True}
+            neighbor = self.get_ring_neighbor()
             self.server.send(neighbor, announce)
             self.server.state.is_leader = True
-            self.server.state.leader_addr = self.server.addr
-            print(f"[ELECTION] I am the new leader")
+            self.server.state.leader_addr = ("127.0.0.1", self.server.state.port)
+            print("[ELECTION] I am the new leader")
             self.participant = False
+
+    def get_ring_neighbor(self):
+        """Return next server in ring based on ID"""
+        ids = sorted(list(self.server.state.servers.keys()) + [self.server.state.server_id])
+        idx = ids.index(self.server.state.server_id)
+        next_idx = (idx + 1) % len(ids)
+        next_id = ids[next_idx]
+        if next_id == self.server.state.server_id:
+            return ("127.0.0.1", self.server.state.port)
+        return self.server.state.servers[next_id]
