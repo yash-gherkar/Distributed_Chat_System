@@ -18,10 +18,10 @@ class HeartbeatManager:
         while True:
             if self.server.state.is_leader:
                 for sid, addr in self.server.state.servers.items():
-                    self.server.send(addr, {"type": HEARTBEAT, "from": self.server.state.server_id})
+                    self.server.send(addr, {"type": HEARTBEAT, "from": self.server.id})
             else:
                 if self.server.state.leader_addr:
-                    self.server.send(self.server.state.leader_addr, {"type": HEARTBEAT, "from": self.server.state.server_id})
+                    self.server.send(self.server.state.leader_addr, {"type": HEARTBEAT, "from": self.server.id})
             time.sleep(HEARTBEAT_INTERVAL)
 
     def _monitor_loop(self):
