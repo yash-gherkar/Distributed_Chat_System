@@ -9,11 +9,11 @@ BUFFER_SIZE = 4096
 
 class Server:
     def __init__(self, server_id, host, port, all_servers):
-        self.id = server_id
         self.host = host
         self.port = port
         self.state = ServerState(server_id)
-        self.state.servers = all_servers  # static discovery
+        self.state.servers = all_servers
+        self.state.server_load = {sid: 0 for sid in all_servers.keys()}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((host, port))
 
@@ -23,13 +23,11 @@ class Server:
         threading.Thread(target=self.receive_loop, daemon=True).start()
         self.heartbeat_manager.start()
 
-        # Assign ring neighbors sorted by ID
-        self.sorted_ids = sorted(self.state.servers.keys())
-        self.sorted_ids.append(self.id)
-        self.sorted_ids.sort()
+        # Ring neighbors
+        self.sorted_ids = sorted(list(self.state.servers.keys()) + [self.state.server_id])
 
     def get_ring_neighbor(self):
-        idx = self.sorted_ids.index(self.id)
+        idx = self.sorted_ids.index(self.state.server_id)
         neighbor_idx = (idx + 1) % len(self.sorted_ids)
         neighbor_id = self.sorted_ids[neighbor_idx]
         return self.state.servers.get(neighbor_id, (self.host, self.port))
@@ -53,7 +51,7 @@ class Server:
                     self.handle_chat_msg(msg)
                 elif t == HEARTBEAT:
                     self.state.last_heartbeat["leader"] = time.time()
-                elif t == ELECTION:
+                elif t in (ELECTION, LEADER_ANNOUNCE):
                     self.election_manager.handle_election_message(msg)
             except Exception as e:
                 print("[RECEIVE ERROR]", e)
@@ -68,11 +66,11 @@ class Server:
         room = msg["room"]
         cid = msg["client_id"]
         # Assign to server with least load
-        target_server = min(self.state.servers.items(), key=lambda x: self.state.server_load.get(x[0], 0))[1]
+        target_sid = min(self.state.server_load, key=self.state.server_load.get)
         self.state.chatrooms[room] = [cid]
-        self.state.room_assignment[room] = target_server
-        self.state.server_load[self.id] = self.state.server_load.get(self.id, 0) + 1
-        self.send(addr, {"type": ROOM_ASSIGNMENT, "room": room, "server_addr": (self.host, self.port)})
+        self.state.room_assignment[room] = target_sid
+        self.state.server_load[target_sid] += 1
+        self.send(addr, {"type": ROOM_ASSIGNMENT, "room": room, "server_addr": self.state.servers[target_sid]})
 
     def handle_join_chatroom(self, msg, addr):
         room = msg["room"]
@@ -81,7 +79,8 @@ class Server:
             self.state.chatrooms[room].append(cid)
         else:
             self.state.chatrooms[room] = [cid]
-        self.send(addr, {"type": ROOM_ASSIGNMENT, "room": room, "server_addr": (self.host, self.port)})
+        server_id = self.state.room_assignment.get(room, self.state.server_id)
+        self.send(addr, {"type": ROOM_ASSIGNMENT, "room": room, "server_addr": self.state.servers[server_id]})
 
     def handle_chat_msg(self, msg):
         room = msg["room"]
@@ -99,7 +98,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, required=True)
     args = parser.parse_args()
 
-    # Example static discovery: other servers known in advance
+    # Example static server discovery
     all_servers = {
         1: ("127.0.0.1", 5001),
         2: ("127.0.0.1", 5002),
@@ -110,8 +109,9 @@ if __name__ == "__main__":
     server = Server(args.id, "127.0.0.1", args.port, all_servers)
     print(f"[SERVER {args.id}] Running on port {args.port}")
 
-    # Start initial election if leader unknown
-    server.election_manager.start_election()
+    # Start election if no leader
+    if not any(s.is_leader for s in [server.state]):
+        server.election_manager.start_election()
 
     while True:
         time.sleep(1)

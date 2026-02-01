@@ -13,11 +13,11 @@ class ElectionManager:
             if self.participant:
                 return
             self.participant = True
-            print(f"[ELECTION] Server {self.server.id} starting ring election")
-            msg = {"mid": self.server.id, "isLeader": False}
+            print(f"[ELECTION] Server {self.server.state.server_id} starting ring election")
+            msg = {"type": ELECTION, "mid": self.server.state.server_id, "isLeader": False}
             neighbor = self.server.get_ring_neighbor()
             if neighbor:
-                self.server.send(neighbor, {"type": ELECTION, **msg})
+                self.server.send(neighbor, msg)
 
     def handle_election_message(self, msg):
         mid = msg["mid"]
@@ -25,28 +25,26 @@ class ElectionManager:
         neighbor = self.server.get_ring_neighbor()
 
         if is_leader:
-            # Leader announced
-            self.server.state.leader_addr = neighbor
-            self.server.state.is_leader = (mid == self.server.id)
+            # Leader announcement
+            self.server.state.leader_addr = (neighbor[0], neighbor[1])
+            self.server.state.is_leader = (mid == self.server.state.server_id)
             print(f"[ELECTION] Leader announced: {mid}")
             self.participant = False
             return
 
-        # Forward or replace
-        if mid > self.server.id:
-            # Forward
+        # Chang–Roberts logic
+        if mid > self.server.state.server_id:
             if neighbor:
                 self.server.send(neighbor, msg)
             self.participant = True
-        elif mid < self.server.id and not self.participant:
-            # Replace and forward
-            new_msg = {"mid": self.server.id, "isLeader": False}
+        elif mid < self.server.state.server_id and not self.participant:
+            new_msg = {"type": ELECTION, "mid": self.server.state.server_id, "isLeader": False}
             if neighbor:
                 self.server.send(neighbor, new_msg)
             self.participant = True
-        elif mid == self.server.id:
-            # I am leader
-            announce = {"mid": self.server.id, "isLeader": True}
+        elif mid == self.server.state.server_id:
+            # I am the new leader
+            announce = {"type": LEADER_ANNOUNCE, "mid": self.server.state.server_id, "isLeader": True}
             if neighbor:
                 self.server.send(neighbor, announce)
             self.server.state.is_leader = True

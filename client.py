@@ -1,5 +1,5 @@
 # client.py
-import socket, json, threading, uuid, time
+import socket, json, threading, time, uuid
 from protocol import *
 
 BUFFER_SIZE = 4096
@@ -22,7 +22,7 @@ class Client:
                 msg = json.loads(data.decode())
                 t = msg.get("type")
                 if t == CHATROOMS_LIST:
-                    print(f"Available rooms: {msg['rooms']}")
+                    print(f"[{self.id}] Rooms: {msg['rooms']}")
                     choice = input("Room to join or create: ").strip()
                     if choice in msg["rooms"]:
                         self.send({"type": JOIN_CHATROOM, "client_id": self.id, "room": choice})
@@ -30,11 +30,11 @@ class Client:
                         self.send({"type": CREATE_CHATROOM, "client_id": self.id, "room": choice})
                 elif t == ROOM_ASSIGNMENT:
                     self.room = msg["room"]
-                    print(f"Joined room {self.room} at server {msg['server_addr']}")
-                elif t == CHAT_MSG and msg["room"] == self.room:
+                    print(f"[{self.id}] Joined {self.room} at server {msg['server_addr']}")
+                elif t == CHAT_MSG and msg.get("room") == self.room:
                     print(f"{msg['from']}: {msg['body']}")
             except Exception as e:
-                print("[CLIENT ERROR]", e)
+                print(f"[CLIENT ERROR] {e}")
 
     def start(self):
         self.send({"type": CLIENT_JOIN, "client_id": self.id})
@@ -42,8 +42,8 @@ class Client:
         while self.room is None:
             time.sleep(0.1)
         while True:
-            text = input("> ")
-            self.send({"type": CHAT_MSG, "from": self.id, "room": self.room, "body": text})
+            text = input(f"[{self.id}] > ")
+            self.send({"type": CHAT_MSG, "from": self.id, "room": self.room, "body": text, "msg_id": str(uuid.uuid4())})
 
 if __name__ == "__main__":
     cid = input("Client ID: ")
