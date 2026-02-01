@@ -1,19 +1,23 @@
-# server/state.py
+# state.py
+import socket
 import time
 
-class ServerState:
-    def __init__(self, server_id):
-        self.server_id = server_id
+BROADCAST_PORT = 10001
+ELECTION_PORT_BASE = 11000
+HEARTBEAT_PORT_BASE = 12000
+CLIENT_PORT = 13000
 
-        self.is_leader = False
-        self.leader_addr = None
+HEARTBEAT_INTERVAL = 2
+HEARTBEAT_TIMEOUT = 5
 
-        self.servers = {}      # server_id -> (ip, port)
-        self.clients = {}      # client_id -> (ip, port)
-        self.chatrooms = {}    # room_name -> server_id
-        self.server_load = {}  # server_id -> number of rooms assigned
-        self.local_rooms = {}  # room_name -> set(client_id) (rooms hosted on this server)
 
-        self.pending_acks = {} # msg_id -> ack tracking
-
-        self.last_heartbeat = time.time()
+def udp_socket(bind_ip=None, bind_port=None, broadcast=False, timeout=None):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if broadcast:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    if bind_ip is not None:
+        s.bind((bind_ip, bind_port))
+    if timeout:
+        s.settimeout(timeout)
+    return s
