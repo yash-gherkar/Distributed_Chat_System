@@ -1,6 +1,7 @@
 # client.py
 import socket, json, threading, time
 from protocol import *
+from cipher import encrypt, decrypt
 
 BUFFER_SIZE = 4096
 BROADCAST_PORT = 5005
@@ -53,7 +54,10 @@ class Client:
                     self.room = msg["room"]
                     print(f"\n>>> Joined: {self.room} via {msg['server_addr']}\n")
                 elif t == CHAT_MSG and msg.get("room") == self.room:
-                    print(f"\r{msg['from']}: {msg['body']}\n{self.id} > ", end="", flush=True)
+                    # Decrypt the body before printing for the user
+                    original_body = decrypt(msg['body'])
+                    print(f"\r{msg['from']}: {original_body}")
+                    print(f"{self.id} > ", end="", flush=True)
             except Exception: break
 
     def start(self):
@@ -63,7 +67,10 @@ class Client:
         while self.room is None: time.sleep(0.1)
         while True:
             text = input(f"{self.id} > ")
-            if text.strip(): self.send({"type": CHAT_MSG, "from": self.id, "room": self.room, "body": text})
+            if text.strip():
+                # Encrypt the body before putting it into the packet
+                encrypted_text = encrypt(text)
+                self.send({"type": CHAT_MSG, "from": self.id, "room": self.room, "body": encrypted_text})
 
 if __name__ == "__main__":
     cid = input("Enter Client ID: ").strip()

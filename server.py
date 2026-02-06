@@ -180,9 +180,15 @@ class Server:
 
     def handle_chat_msg(self, msg):
         room = msg["room"]
+        sender = msg["from"]
+        encrypted_body = msg["body"] # The body is already encrypted by the client
+        
         if room in self.state.chatrooms:
             for cid in self.state.chatrooms[room]:
-                if cid != msg["from"]:
+                if cid != sender:
+                    # Log the encrypted message as requested
+                    print(f"[CHAT] {sender} has sent '{encrypted_body}' to {cid}")
+                    
                     addr = self.state.clients.get(cid)
                     if addr:
                         self.send(addr, msg)
