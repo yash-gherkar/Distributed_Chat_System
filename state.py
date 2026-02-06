@@ -1,4 +1,3 @@
-# state.py
 import time
 
 class ServerState:
@@ -6,11 +5,9 @@ class ServerState:
         self.server_id = server_id
         self.is_leader = False
         self.leader_addr = None
-
-        self.servers = {}        # server_id -> (ip, port)
+        self.servers = {}        
         self.clients = {}        # client_id -> (ip, port)
-        self.chatrooms = {}      # room_name -> list of client_ids
+        self.chatrooms = {}      # room_name -> [list of client_ids]
         self.room_assignment = {} # room_name -> server_id
-        self.server_load = {}    # server_id -> number of rooms assigned
-
+        self.server_load = {}    # server_id -> count of rooms
         self.last_heartbeat = {"leader": time.time()}
