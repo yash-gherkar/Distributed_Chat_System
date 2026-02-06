@@ -51,6 +51,8 @@ python3 server.py --id 2 --port 5002
 2. Start the Clients
 Open new terminals to run the clients. They will automatically search for the servers on the network.
 
+For manually adding - python3 client.py --server_ip 100.64.156.17 --server_port 5002
+
 Bash
 python3 client.py
 Enter a Client ID (e.g., Alice).
