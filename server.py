@@ -1,122 +1,117 @@
-import socket
-import threading
-import json
-import time
-import uuid
-import argparse
+# server.py
+import socket, threading, json, time, argparse
+from state import ServerState
+from heartbeat import HeartbeatManager
+from election import ElectionManager
 from protocol import *
 
 BUFFER_SIZE = 4096
-HEARTBEAT_INTERVAL = 2
-HEARTBEAT_TIMEOUT = 6
 
 class Server:
-    def __init__(self, server_id, port):
-        self.id = server_id
+    def __init__(self, server_id, host, port, all_servers):
+        self.host = host
         self.port = port
-        self.addr = ('', port)
+        self.state = ServerState(server_id)
+        self.state.servers = all_servers
+        self.state.server_load = {sid: 0 for sid in all_servers.keys()}
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(self.addr)
+        self.sock.bind((host, port))
 
-        # Server state
-        self.is_leader = False
-        self.leader_addr = None
-        self.servers = {}  # server_id -> (ip, port)
-        self.clients = {}  # client_id -> (ip, port)
-        self.chatrooms = {}  # room -> list of client_ids
-        self.room_assignment = {}  # room -> server_id
+        self.election_manager = ElectionManager(self)
+        self.heartbeat_manager = HeartbeatManager(self)
 
-        self.last_heartbeat = time.time()
-
-        # Start threads
         threading.Thread(target=self.receive_loop, daemon=True).start()
-        threading.Thread(target=self.heartbeat_loop, daemon=True).start()
-        threading.Thread(target=self.election_loop, daemon=True).start()
+        self.heartbeat_manager.start()
+
+        # Ring neighbors
+        self.sorted_ids = sorted(list(self.state.servers.keys()) + [self.state.server_id])
+
+    def get_ring_neighbor(self):
+        idx = self.sorted_ids.index(self.state.server_id)
+        neighbor_idx = (idx + 1) % len(self.sorted_ids)
+        neighbor_id = self.sorted_ids[neighbor_idx]
+        return self.state.servers.get(neighbor_id, (self.host, self.port))
 
     def send(self, addr, msg):
         self.sock.sendto(json.dumps(msg).encode(), addr)
-
-    def broadcast(self, msg):
-        for s_id, addr in self.servers.items():
-            self.send(addr, msg)
 
     def receive_loop(self):
         while True:
             try:
                 data, addr = self.sock.recvfrom(BUFFER_SIZE)
                 msg = json.loads(data.decode())
-                self.handle_message(msg, addr)
+                t = msg.get("type")
+                if t == CLIENT_JOIN:
+                    self.handle_client_join(msg, addr)
+                elif t == CREATE_CHATROOM:
+                    self.handle_create_chatroom(msg, addr)
+                elif t == JOIN_CHATROOM:
+                    self.handle_join_chatroom(msg, addr)
+                elif t == CHAT_MSG:
+                    self.handle_chat_msg(msg)
+                elif t == HEARTBEAT:
+                    self.state.last_heartbeat["leader"] = time.time()
+                elif t in (ELECTION, LEADER_ANNOUNCE):
+                    self.election_manager.handle_election_message(msg)
             except Exception as e:
-                print("Receive error:", e)
+                print("[RECEIVE ERROR]", e)
 
-    def heartbeat_loop(self):
-        while True:
-            time.sleep(HEARTBEAT_INTERVAL)
-            if self.is_leader:
-                self.broadcast({"type": HEARTBEAT, "from": self.id})
-            else:
-                if time.time() - self.last_heartbeat > HEARTBEAT_TIMEOUT:
-                    print("Leader timeout detected, starting election")
-                    self.start_election()
+    # ---------------- Client Handlers ----------------
+    def handle_client_join(self, msg, addr):
+        cid = msg["client_id"]
+        self.state.clients[cid] = addr
+        self.send(addr, {"type": CHATROOMS_LIST, "rooms": list(self.state.chatrooms.keys())})
 
-    def election_loop(self):
-        # Only waits for election messages
-        while True:
-            time.sleep(1)
+    def handle_create_chatroom(self, msg, addr):
+        room = msg["room"]
+        cid = msg["client_id"]
+        # Assign to server with least load
+        target_sid = min(self.state.server_load, key=self.state.server_load.get)
+        self.state.chatrooms[room] = [cid]
+        self.state.room_assignment[room] = target_sid
+        self.state.server_load[target_sid] += 1
+        self.send(addr, {"type": ROOM_ASSIGNMENT, "room": room, "server_addr": self.state.servers[target_sid]})
 
-    def start_election(self):
-        all_ids = list(self.servers.keys()) + [self.id]
-        new_leader = max(all_ids)
-        self.leader_addr = self.servers.get(new_leader, self.addr)
-        self.is_leader = (new_leader == self.id)
-        print(f"New leader elected: {new_leader}, I am leader: {self.is_leader}")
+    def handle_join_chatroom(self, msg, addr):
+        room = msg["room"]
+        cid = msg["client_id"]
+        if room in self.state.chatrooms:
+            self.state.chatrooms[room].append(cid)
+        else:
+            self.state.chatrooms[room] = [cid]
+        server_id = self.state.room_assignment.get(room, self.state.server_id)
+        self.send(addr, {"type": ROOM_ASSIGNMENT, "room": room, "server_addr": self.state.servers[server_id]})
 
-    def handle_message(self, msg, addr):
-        t = msg.get("type")
+    def handle_chat_msg(self, msg):
+        room = msg["room"]
+        if room in self.state.chatrooms:
+            for cid in self.state.chatrooms[room]:
+                if cid != msg["from"]:
+                    addr = self.state.clients.get(cid)
+                    if addr:
+                        self.send(addr, msg)
 
-        if t == CLIENT_JOIN:
-            client_id = msg["client_id"]
-            self.clients[client_id] = addr
-            # Send chatroom list
-            self.send(addr, {"type": CHATROOMS_LIST, "rooms": list(self.chatrooms.keys())})
-
-        elif t == CREATE_CHATROOM:
-            room = msg["room"]
-            client_id = msg["client_id"]
-            self.chatrooms[room] = [client_id]
-            self.room_assignment[room] = self.id
-            self.send(addr, {"type": ROOM_ASSIGNMENT, "room": room, "server_addr": self.addr})
-
-        elif t == JOIN_CHATROOM:
-            room = msg["room"]
-            client_id = msg["client_id"]
-            if room in self.chatrooms:
-                self.chatrooms[room].append(client_id)
-            else:
-                self.chatrooms[room] = [client_id]
-            self.room_assignment[room] = self.id
-            self.send(addr, {"type": ROOM_ASSIGNMENT, "room": room, "server_addr": self.addr})
-
-        elif t == CHAT_MSG:
-            room = msg["room"]
-            if room in self.chatrooms:
-                for client_id in self.chatrooms[room]:
-                    if client_id != msg["from"]:
-                        client_addr = self.clients.get(client_id)
-                        if client_addr:
-                            self.send(client_addr, msg)
-
-        elif t == HEARTBEAT:
-            self.last_heartbeat = time.time()
-
+# ---------------- Main ----------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--id', type=int, required=True)
-    parser.add_argument('--port', type=int, required=True)
+    parser.add_argument("--id", type=int, required=True)
+    parser.add_argument("--port", type=int, required=True)
     args = parser.parse_args()
 
-    server = Server(args.id, args.port)
-    print(f"Server {args.id} running on port {args.port}")
+    # Example static server discovery
+    all_servers = {
+        1: ("127.0.0.1", 5001),
+        2: ("127.0.0.1", 5002),
+        3: ("127.0.0.1", 5003),
+        4: ("127.0.0.1", 5004)
+    }
+
+    server = Server(args.id, "127.0.0.1", args.port, all_servers)
+    print(f"[SERVER {args.id}] Running on port {args.port}")
+
+    # Start election if no leader
+    if not any(s.is_leader for s in [server.state]):
+        server.election_manager.start_election()
 
     while True:
         time.sleep(1)

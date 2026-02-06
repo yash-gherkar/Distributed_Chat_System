@@ -1,6 +1,5 @@
 # heartbeat.py
-import threading
-import time
+import threading, time
 from protocol import HEARTBEAT
 
 HEARTBEAT_INTERVAL = 2
@@ -26,10 +25,10 @@ class HeartbeatManager:
 
     def _monitor_loop(self):
         while True:
-            now = time.time()
-            if not self.server.state.is_leader:
-                last = self.server.state.last_heartbeat.get("leader", 0)
-                if now - last > HEARTBEAT_TIMEOUT:
-                    print("[HEARTBEAT] Leader timeout detected")
-                    self.server.election_manager.start_election()
             time.sleep(1)
+            if self.server.state.is_leader:
+                continue
+            last = self.server.state.last_heartbeat.get("leader", 0)
+            if time.time() - last > HEARTBEAT_TIMEOUT:
+                print(f"[HEARTBEAT] Leader timeout → starting election")
+                self.server.election_manager.start_election()
