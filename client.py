@@ -61,15 +61,24 @@ class Client:
                     print(f"{self.id} > ", end="", flush=True)
             except Exception: break
 
+    # client.py
+
     def start(self):
-        self.find_server()
+        # Only find a server if one wasn't manually specified via CLI
+        if not self.server_addr:
+            self.find_server()
+        else:
+            print(f"Using manual server address: {self.server_addr}")
+
         self.send({"type": CLIENT_JOIN, "client_id": self.id})
         threading.Thread(target=self.listen, daemon=True).start()
-        while self.room is None: time.sleep(0.1)
+        
+        while self.room is None: 
+            time.sleep(0.1)
+        
         while True:
             text = input(f"{self.id} > ")
             if text.strip():
-                # Encrypt the body before putting it into the packet
                 encrypted_text = encrypt(text)
                 self.send({"type": CHAT_MSG, "from": self.id, "room": self.room, "body": encrypted_text})
 
