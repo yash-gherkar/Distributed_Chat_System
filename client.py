@@ -1,5 +1,6 @@
 # client.py
 import socket, json, threading, time
+import argparse
 from protocol import *
 from cipher import encrypt, decrypt
 
@@ -73,6 +74,19 @@ class Client:
                 self.send({"type": CHAT_MSG, "from": self.id, "room": self.room, "body": encrypted_text})
 
 if __name__ == "__main__":
-    cid = input("Enter Client ID: ").strip()
-    client = Client(cid)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--server_ip", type=str, default=None, help="Force connect to this IP")
+    parser.add_argument("--server_port", type=int, default=None, help="Force connect to this port")
+    args = parser.parse_args()
+
+    client_id = input("Enter Client ID: ")
+    client = Client(client_id)
+    
+    # If arguments are provided, skip discovery
+    if args.server_ip and args.server_port:
+        print(f"Forcing connection to {args.server_ip}:{args.server_port}...")
+        client.server_addr = (args.server_ip, args.server_port)
+    else:
+        client.find_server()
+        
     client.start()
